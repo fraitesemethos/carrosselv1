@@ -1,0 +1,7 @@
+{
+  "name": "Copy para mentorados Criador de Anúncios com IA para Redes Sociais",
+  "description": "Um aplicativo com tecnologia de IA para gerar criativos completos para anúncios de redes sociais, incluindo texto e imagens, em vários formatos. Os usuários podem fornecer o conteúdo base e a imagem de um especialista, e a IA cuida do resto, oferecendo múltiplas variações e capacidades de edição.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
