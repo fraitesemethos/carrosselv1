@@ -13,11 +13,27 @@ export class ApiKeyError extends Error {
 let ai: GoogleGenAI | null = null;
 
 export const setApiKey = (key: string) => {
-    if (!key) {
+    if (!key || !key.trim()) {
         ai = null;
+        console.warn('Chave de API vazia ou inválida');
         return;
     }
-    ai = new GoogleGenAI({ apiKey: key });
+    
+    const trimmedKey = key.trim();
+    
+    // Validação básica da chave (formato típico das chaves do Google AI Studio)
+    if (trimmedKey.length < 20) {
+        console.warn('Chave de API parece muito curta:', trimmedKey.length, 'caracteres');
+    }
+    
+    try {
+        ai = new GoogleGenAI({ apiKey: trimmedKey });
+        console.log('Chave de API configurada com sucesso');
+    } catch (error) {
+        console.error('Erro ao configurar cliente GoogleGenAI:', error);
+        ai = null;
+        throw new ApiKeyError('Erro ao inicializar a chave de API. Verifique se a chave está correta.');
+    }
 };
 
 const getAiClient = (): GoogleGenAI => {
@@ -61,18 +77,54 @@ const adCopyVariationSchema = {
 
 const handleApiError = (error: unknown, context: string): Error => {
     console.error(`Erro em ${context}:`, error);
+    
+    // Log detalhado do erro para debug
+    if (error instanceof Error) {
+        console.error(`Erro detalhado:`, {
+            message: error.message,
+            name: error.name,
+            stack: error.stack,
+            // @ts-ignore - algumas versões do SDK podem ter propriedades adicionais
+            status: error.status,
+            // @ts-ignore
+            code: error.code,
+            // @ts-ignore
+            response: error.response,
+        });
+    }
+    
     if (error instanceof Error) {
         if (error instanceof ApiKeyError) {
           return error;
         }
-        if (error.message.toLowerCase().includes('quota')) {
-            return new Error("Limite de uso da API excedido. Por favor, verifique sua cota e tente novamente mais tarde.");
-        }
-        if (error.message.includes('API key not valid') || error.message.includes('API_KEY_INVALID') || error.message.includes('Requested entity was not found') || error.message.includes('permission')) {
+        
+        const errorMsg = error.message.toLowerCase();
+        
+        // Verificar problemas com a chave de API primeiro
+        if (errorMsg.includes('api key not valid') || 
+            errorMsg.includes('api_key_invalid') || 
+            errorMsg.includes('requested entity was not found') || 
+            errorMsg.includes('permission') ||
+            errorMsg.includes('401') ||
+            errorMsg.includes('unauthorized') ||
+            errorMsg.includes('invalid api key') ||
+            errorMsg.includes('authentication')) {
             return new ApiKeyError("A chave de API fornecida não é válida, está incorreta ou não tem as permissões necessárias. Verifique a chave e tente novamente.");
         }
+        
+        // Verificar problemas de quota/limite
+        if (errorMsg.includes('quota') || 
+            errorMsg.includes('rate limit') ||
+            errorMsg.includes('429') ||
+            errorMsg.includes('too many requests') ||
+            errorMsg.includes('resource exhausted')) {
+            return new Error("Limite de uso da API excedido. Por favor, verifique sua cota e tente novamente mais tarde.");
+        }
+        
+        // Erro genérico com a mensagem original
         return new Error(`Falha em ${context}: ${error.message}`);
     }
+    
     return new Error(`Ocorreu um erro desconhecido em ${context}.`);
 };
 
@@ -680,13 +732,27 @@ export const generateCarouselPlan = async (promptContext: string, backgroundProm
 export const generateImage = async (prompt: string, aspectRatio: '1:1' | '4:5' | '9:16'): Promise<string> => {
     const ai = getAiClient();
     try {
+        // Mapear 4:5 para 3:4 que é suportado pela API (valores próximos - ambos retrato vertical)
+        // API suporta apenas: '1:1', '9:16', '16:9', '4:3', '3:4'
+        let apiAspectRatio: '1:1' | '9:16' | '3:4' | '4:3' | '16:9';
+        
+        if (aspectRatio === '4:5') {
+            apiAspectRatio = '3:4'; // Formato mais próximo suportado (ambos retrato vertical)
+        } else if (aspectRatio === '9:16') {
+            apiAspectRatio = '9:16';
+        } else {
+            apiAspectRatio = '1:1';
+        }
+        
+        console.log(`[DEBUG] Aspect ratio: ${aspectRatio} -> ${apiAspectRatio}`);
+        
         const response = await ai.models.generateImages({
             model: 'imagen-4.0-generate-001',
             prompt: prompt,
             config: {
                 numberOfImages: 1,
                 outputMimeType: 'image/png',
-                aspectRatio: aspectRatio,
+                aspectRatio: apiAspectRatio,
             },
             safetySettings,
         });
@@ -705,8 +771,9 @@ export const generateImage = async (prompt: string, aspectRatio: '1:1' | '4:5' |
 export const recreateExpertImage = async (base64ImageData: string, mimeType: string, prompt: string, aspectRatio: '1:1' | '4:5' | '9:16'): Promise<string> => {
     const ai = getAiClient();
     try {
+        // Mapear 4:5 para 3:4 que é suportado pela API (valores próximos - ambos retrato vertical)
         const aspectRatioText = aspectRatio === '4:5' 
-            ? 'A imagem resultante DEVE ter uma proporção de 4:5 (retrato, mais alta que larga).' 
+            ? 'A imagem resultante DEVE ter uma proporção de 3:4 (retrato, mais alta que larga, similar ao formato 4:5 do Instagram).' 
             : aspectRatio === '9:16' 
             ? 'A imagem resultante DEVE ter uma proporção de 9:16 (storie, bem alta).' 
             : 'A imagem resultante DEVE ser quadrada (proporção 1:1).';

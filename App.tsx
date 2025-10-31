@@ -90,17 +90,36 @@ const App: React.FC = () => {
     return false;
   };
 
-  const handleApiKeySubmit = (key: string, remember: boolean) => {
+  const handleApiKeySubmit = async (key: string, remember: boolean) => {
     const trimmedKey = key.trim();
-    setGeminiApiKey(trimmedKey);
-    sessionStorage.setItem('geminiApiKey', trimmedKey);
-    if (remember) {
-        localStorage.setItem('geminiApiKey', trimmedKey);
-    } else {
-        localStorage.removeItem('geminiApiKey');
+    
+    // Validação básica
+    if (!trimmedKey || trimmedKey.length < 20) {
+      setErrorMessage('A chave de API parece inválida. Verifique se copiou a chave completa.');
+      return;
     }
-    setIsApiKeySet(true);
-    setErrorMessage(''); // Clear previous errors
+    
+    // Limpar erros anteriores
+    setErrorMessage('');
+    
+    try {
+      // Configurar a chave
+      setGeminiApiKey(trimmedKey);
+      
+      // Salvar a chave
+      sessionStorage.setItem('geminiApiKey', trimmedKey);
+      if (remember) {
+          localStorage.setItem('geminiApiKey', trimmedKey);
+      } else {
+          localStorage.removeItem('geminiApiKey');
+      }
+      
+      setIsApiKeySet(true);
+    } catch (error) {
+      console.error('Erro ao configurar chave de API:', error);
+      setErrorMessage('Erro ao configurar a chave de API. Por favor, tente novamente.');
+      setIsApiKeySet(false);
+    }
   };
 
   const handleProjectSubmit = (context: string) => {
@@ -719,6 +738,18 @@ const App: React.FC = () => {
             disabled={isLoading}
           >
             Histórico ({history.length})
+          </Button>
+          <Button 
+            onClick={() => {
+              setGeminiApiKey('');
+              setIsApiKeySet(false);
+              sessionStorage.removeItem('geminiApiKey');
+              localStorage.removeItem('geminiApiKey');
+            }}
+            variant="secondary"
+            disabled={isLoading}
+          >
+            Trocar Chave de API
           </Button>
           {(generatedCreatives.length > 0 || selectedCarousel) && (
               <Button 
