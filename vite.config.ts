@@ -28,9 +28,14 @@ export default defineConfig(({ mode }) => {
       },
       plugins: [react()],
       define: {
+        // Incluir a chave nas variáveis disponíveis durante o build
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY || ''),
-        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY || '')
+        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY || ''),
+        // Para variáveis client-side do Vite, precisam começar com VITE_
+        'import.meta.env.VITE_GEMINI_API_KEY': JSON.stringify(env.VITE_GEMINI_API_KEY || env.GEMINI_API_KEY || '')
       },
+      // Expor variáveis de ambiente para o cliente (apenas as que começam com VITE_)
+      envPrefix: 'VITE_',
       resolve: {
         alias: {
           '@': path.resolve(__dirname, '.'),

@@ -50,6 +50,24 @@ const App: React.FC = () => {
   const offscreenRenderRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    // Verificar se há uma chave nas variáveis de ambiente primeiro
+    // A chave será embutida no código durante o build pelo Vite
+    // @ts-ignore - Vite define essas variáveis via define no vite.config.ts
+    const envKey = typeof process !== 'undefined' && process.env?.GEMINI_API_KEY 
+        ? process.env.GEMINI_API_KEY 
+        : (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GEMINI_API_KEY 
+            ? import.meta.env.VITE_GEMINI_API_KEY 
+            : null);
+    
+    if (envKey && envKey.trim() && envKey !== 'coloque_sua_chave_aqui') {
+        // Chave definida no ambiente - usar automaticamente
+        setGeminiApiKey(envKey.trim());
+        setIsApiKeySet(true);
+        setIsCheckingApiKey(false);
+        return;
+    }
+    
+    // Se não houver chave no ambiente, verificar localStorage/sessionStorage
     const storedKey = sessionStorage.getItem('geminiApiKey') || localStorage.getItem('geminiApiKey');
     if (storedKey) {
         setGeminiApiKey(storedKey);

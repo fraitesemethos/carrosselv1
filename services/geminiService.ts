@@ -12,6 +12,34 @@ export class ApiKeyError extends Error {
 
 let ai: GoogleGenAI | null = null;
 
+// Inicializar automaticamente com a chave do ambiente, se disponível
+const initializeFromEnv = () => {
+    // Tentar obter a chave de várias fontes (Vite define essas variáveis durante o build)
+    let envKey: string | null = null;
+    
+    // 1. Tentar process.env (definido pelo Vite durante build)
+    // @ts-ignore - Vite define essas variáveis via define
+    if (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) {
+        envKey = process.env.GEMINI_API_KEY;
+    }
+    // 2. Tentar import.meta.env (padrão Vite para variáveis client-side)
+    else if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GEMINI_API_KEY) {
+        envKey = import.meta.env.VITE_GEMINI_API_KEY;
+    }
+    
+    if (envKey && envKey.trim() && envKey !== 'coloque_sua_chave_aqui') {
+        try {
+            ai = new GoogleGenAI({ apiKey: envKey.trim() });
+            console.log('Chave de API configurada automaticamente a partir das variáveis de ambiente');
+        } catch (error) {
+            console.error('Erro ao inicializar cliente GoogleGenAI com chave do ambiente:', error);
+        }
+    }
+};
+
+// Inicializar na importação do módulo
+initializeFromEnv();
+
 export const setApiKey = (key: string) => {
     if (!key || !key.trim()) {
         ai = null;
