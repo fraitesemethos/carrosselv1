@@ -29,11 +29,18 @@ const initializeFromEnv = () => {
     
     if (envKey && envKey.trim() && envKey !== 'coloque_sua_chave_aqui') {
         try {
+            const maskedKey = envKey.length > 10 
+                ? `${envKey.substring(0, 8)}...${envKey.substring(envKey.length - 4)}`
+                : '***';
+            console.log(`[API] Chave de ambiente detectada: ${maskedKey} (tamanho: ${envKey.length})`);
             ai = new GoogleGenAI({ apiKey: envKey.trim() });
-            console.log('Chave de API configurada automaticamente a partir das variáveis de ambiente');
+            console.log('[API] Chave de API configurada automaticamente a partir das variáveis de ambiente');
         } catch (error) {
-            console.error('Erro ao inicializar cliente GoogleGenAI com chave do ambiente:', error);
+            const errorMsg = error instanceof Error ? error.message : 'Erro desconhecido';
+            console.error('[API] Erro ao inicializar cliente GoogleGenAI com chave do ambiente:', errorMsg);
         }
+    } else {
+        console.log('[API] Nenhuma chave de API encontrada nas variáveis de ambiente');
     }
 };
 
@@ -43,30 +50,43 @@ initializeFromEnv();
 export const setApiKey = (key: string) => {
     if (!key || !key.trim()) {
         ai = null;
-        console.warn('Chave de API vazia ou inválida');
+        console.warn('[API] Chave de API vazia ou inválida');
         return;
     }
     
     const trimmedKey = key.trim();
     
+    // Log parcial da chave para debug (mostra apenas os primeiros e últimos caracteres)
+    const maskedKey = trimmedKey.length > 10 
+        ? `${trimmedKey.substring(0, 8)}...${trimmedKey.substring(trimmedKey.length - 4)}`
+        : '***';
+    console.log(`[API] Configurando chave de API: ${maskedKey} (tamanho: ${trimmedKey.length})`);
+    
     // Validação básica da chave (formato típico das chaves do Google AI Studio)
     if (trimmedKey.length < 20) {
-        console.warn('Chave de API parece muito curta:', trimmedKey.length, 'caracteres');
+        console.warn('[API] Chave de API parece muito curta:', trimmedKey.length, 'caracteres');
+        throw new ApiKeyError('A chave de API parece muito curta. Verifique se copiou a chave completa.');
     }
     
     try {
         ai = new GoogleGenAI({ apiKey: trimmedKey });
-        console.log('Chave de API configurada com sucesso');
+        console.log('[API] Chave de API configurada com sucesso');
     } catch (error) {
-        console.error('Erro ao configurar cliente GoogleGenAI:', error);
+        const errorMsg = error instanceof Error ? error.message : 'Erro desconhecido';
+        console.error('[API] Erro ao configurar cliente GoogleGenAI:', errorMsg);
         ai = null;
-        throw new ApiKeyError('Erro ao inicializar a chave de API. Verifique se a chave está correta.');
+        throw new ApiKeyError(`Erro ao inicializar a chave de API: ${errorMsg}. Verifique se a chave está correta e tem as permissões necessárias.`);
     }
 };
 
 const getAiClient = (): GoogleGenAI => {
     if (!ai) {
-        throw new ApiKeyError("A chave de API não foi configurada. Por favor, insira sua chave de API do Google AI Studio.");
+        console.error('[API] Tentativa de usar cliente AI sem chave configurada');
+        // Tentar inicializar novamente do ambiente
+        initializeFromEnv();
+        if (!ai) {
+            throw new ApiKeyError("A chave de API não foi configurada. Por favor, insira sua chave de API do Google AI Studio.");
+        }
     }
     return ai;
 };
@@ -104,21 +124,48 @@ const adCopyVariationSchema = {
 };
 
 const handleApiError = (error: unknown, context: string): Error => {
-    console.error(`Erro em ${context}:`, error);
+    console.error(`[ERROR] Erro em ${context}:`, error);
     
     // Log detalhado do erro para debug
+    let errorDetails: any = {};
     if (error instanceof Error) {
-        console.error(`Erro detalhado:`, {
+        errorDetails = {
             message: error.message,
             name: error.name,
             stack: error.stack,
+        };
+        
+        // Tentar extrair informações adicionais do erro
+        try {
             // @ts-ignore - algumas versões do SDK podem ter propriedades adicionais
-            status: error.status,
+            if (error.status) errorDetails.status = error.status;
             // @ts-ignore
-            code: error.code,
+            if (error.code) errorDetails.code = error.code;
             // @ts-ignore
-            response: error.response,
-        });
+            if (error.response) errorDetails.response = error.response;
+            // @ts-ignore
+            if (error.cause) errorDetails.cause = error.cause;
+        } catch (e) {
+            // Ignorar erros ao acessar propriedades
+        }
+        
+        console.error(`[ERROR] Erro detalhado:`, errorDetails);
+        
+        // Tentar extrair mensagem de erro do objeto de erro se disponível
+        let rawErrorString = '';
+        try {
+            rawErrorString = JSON.stringify(error);
+            console.error(`[ERROR] Erro em JSON:`, rawErrorString);
+        } catch (e) {
+            // Ignorar
+        }
+    } else {
+        try {
+            errorDetails = { raw: JSON.stringify(error) };
+            console.error(`[ERROR] Erro (não é Error):`, errorDetails);
+        } catch (e) {
+            console.error(`[ERROR] Erro desconhecido:`, error);
+        }
     }
     
     if (error instanceof Error) {
@@ -127,8 +174,9 @@ const handleApiError = (error: unknown, context: string): Error => {
         }
         
         const errorMsg = error.message.toLowerCase();
+        const fullErrorString = JSON.stringify(error).toLowerCase();
         
-        // Verificar problemas com a chave de API primeiro
+        // Verificar problemas com a chave de API primeiro (prioridade)
         if (errorMsg.includes('api key not valid') || 
             errorMsg.includes('api_key_invalid') || 
             errorMsg.includes('requested entity was not found') || 
@@ -136,29 +184,46 @@ const handleApiError = (error: unknown, context: string): Error => {
             errorMsg.includes('401') ||
             errorMsg.includes('unauthorized') ||
             errorMsg.includes('invalid api key') ||
-            errorMsg.includes('authentication')) {
+            errorMsg.includes('authentication') ||
+            errorMsg.includes('api key not set') ||
+            fullErrorString.includes('api key not valid') ||
+            fullErrorString.includes('api_key_invalid') ||
+            fullErrorString.includes('unauthorized')) {
             return new ApiKeyError("A chave de API fornecida não é válida, está incorreta ou não tem as permissões necessárias. Verifique a chave e tente novamente.");
         }
         
-        // Verificar problemas de quota/limite
+        // Verificar problemas de quota/limite (após verificar autenticação)
         if (errorMsg.includes('quota') || 
             errorMsg.includes('rate limit') ||
             errorMsg.includes('429') ||
             errorMsg.includes('too many requests') ||
-            errorMsg.includes('resource exhausted')) {
+            errorMsg.includes('resource exhausted') ||
+            fullErrorString.includes('quota') ||
+            fullErrorString.includes('rate limit')) {
             return new Error("Limite de uso da API excedido. Por favor, verifique sua cota e tente novamente mais tarde.");
         }
         
-        // Erro genérico com a mensagem original
-        return new Error(`Falha em ${context}: ${error.message}`);
+        // Verificar se é erro de billing (conta não tem faturamento)
+        if (errorMsg.includes('billed') || 
+            errorMsg.includes('billing') ||
+            errorMsg.includes('payment required') ||
+            fullErrorString.includes('billed') ||
+            fullErrorString.includes('billing')) {
+            return new Error("Esta API requer uma conta com faturamento ativado. Por favor, ative o faturamento na sua conta Google Cloud.");
+        }
+        
+        // Erro genérico com a mensagem original (mais informativo)
+        const originalMessage = error.message || 'Erro desconhecido';
+        return new Error(`Falha em ${context}: ${originalMessage}. Verifique o console do navegador para mais detalhes.`);
     }
     
-    return new Error(`Ocorreu um erro desconhecido em ${context}.`);
+    return new Error(`Ocorreu um erro desconhecido em ${context}. Verifique o console do navegador para mais detalhes.`);
 };
 
 
 export const generateAdStrategyAndCopy = async (promptContext: string): Promise<AdCopyVariation[]> => {
     const ai = getAiClient();
+    console.log('[GENERATE] Iniciando geração de estratégia e copy...');
     try {
         const prompt = `
         Com base no contexto do projeto e na estratégia do anúncio fornecidos, crie 3 variações de copy para um anúncio.
