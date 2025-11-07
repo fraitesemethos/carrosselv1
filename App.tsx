@@ -53,25 +53,47 @@ const App: React.FC = () => {
     // Verificar se há uma chave nas variáveis de ambiente primeiro
     // A chave será embutida no código durante o build pelo Vite
     // @ts-ignore - Vite define essas variáveis via define no vite.config.ts
-    const envKey = typeof process !== 'undefined' && process.env?.GEMINI_API_KEY 
-        ? process.env.GEMINI_API_KEY 
-        : (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GEMINI_API_KEY 
-            ? import.meta.env.VITE_GEMINI_API_KEY 
-            : null);
+    let envKey: string | null = null;
     
-    if (envKey && envKey.trim() && envKey !== 'coloque_sua_chave_aqui') {
-        // Chave definida no ambiente - usar automaticamente
-        setGeminiApiKey(envKey.trim());
-        setIsApiKeySet(true);
-        setIsCheckingApiKey(false);
-        return;
+    if (typeof process !== 'undefined' && process.env && process.env.GEMINI_API_KEY) {
+      const key = process.env.GEMINI_API_KEY;
+      if (key && typeof key === 'string' && key.trim() && key !== 'coloque_sua_chave_aqui' && key.length >= 20) {
+        envKey = key.trim();
+      }
     }
     
-    // Se não houver chave no ambiente, verificar localStorage/sessionStorage
+    if (!envKey && typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_GEMINI_API_KEY) {
+      const key = import.meta.env.VITE_GEMINI_API_KEY;
+      if (key && typeof key === 'string' && key.trim() && key !== 'coloque_sua_chave_aqui' && key.length >= 20) {
+        envKey = key.trim();
+      }
+    }
+    
+    if (envKey) {
+        // Chave definida no ambiente - usar automaticamente
+        try {
+          setGeminiApiKey(envKey);
+          setIsApiKeySet(true);
+          setIsCheckingApiKey(false);
+          return;
+        } catch (error) {
+          console.error('[APP] Erro ao configurar chave do ambiente:', error);
+          // Continuar para verificar localStorage
+        }
+    }
+    
+    // Se não houver chave no ambiente válida, verificar localStorage/sessionStorage
     const storedKey = sessionStorage.getItem('geminiApiKey') || localStorage.getItem('geminiApiKey');
-    if (storedKey) {
-        setGeminiApiKey(storedKey);
-        setIsApiKeySet(true);
+    if (storedKey && storedKey.trim() && storedKey.length >= 20) {
+        try {
+          setGeminiApiKey(storedKey);
+          setIsApiKeySet(true);
+        } catch (error) {
+          console.error('[APP] Erro ao configurar chave armazenada:', error);
+          // Limpar chave inválida
+          sessionStorage.removeItem('geminiApiKey');
+          localStorage.removeItem('geminiApiKey');
+        }
     }
     setIsCheckingApiKey(false);
   }, []);
@@ -263,6 +285,36 @@ const App: React.FC = () => {
 
   const imageFilter = (node: HTMLElement) => !node.classList?.contains('rich-text-toolbar');
 
+  // Função auxiliar para aguardar o carregamento da imagem
+  const waitForImageLoad = (imageUrl: string, timeout: number = 10000): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      if (!imageUrl) {
+        resolve();
+        return;
+      }
+
+      const img = new Image();
+      const timeoutId = setTimeout(() => {
+        reject(new Error('Timeout ao carregar imagem'));
+      }, timeout);
+
+      img.onload = () => {
+        clearTimeout(timeoutId);
+        // Aguardar um pouco mais para garantir que o CSS backgroundImage foi aplicado
+        setTimeout(() => resolve(), 100);
+      };
+
+      img.onerror = () => {
+        clearTimeout(timeoutId);
+        // Mesmo se houver erro, continuar (pode ser CORS ou outro problema)
+        console.warn('Aviso: Não foi possível verificar o carregamento da imagem:', imageUrl);
+        setTimeout(() => resolve(), 200);
+      };
+
+      img.src = imageUrl;
+    });
+  };
+
   const handleDownload = useCallback(() => {
     if (!adPreviewRef.current) return;
     toPng(adPreviewRef.current, { cacheBust: true, pixelRatio: 2 / previewScale, filter: imageFilter })
@@ -311,11 +363,31 @@ const App: React.FC = () => {
       const root = createRoot(tempNode);
       root.render(element);
 
-      await new Promise(resolve => setTimeout(resolve, 100)); 
+      // Aguardar renderização inicial
+      await new Promise(resolve => setTimeout(resolve, 150));
       
       try {
+        // Aguardar carregamento da imagem antes de fazer o download
+        setLoadingMessage(`Aguardando carregamento do slide ${i + 1}/${selectedCarousel.slides.length}...`);
+        await waitForImageLoad(slide.imageUrl, 15000);
+        
+        // Aguardar um pouco mais para garantir que tudo está renderizado
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
         setLoadingMessage(`Baixando slide ${i + 1}/${selectedCarousel.slides.length}...`);
-        const dataUrl = await toPng(tempNode.firstChild as HTMLElement, { cacheBust: true, pixelRatio: 2, filter: imageFilter });
+        const slideElement = tempNode.firstChild as HTMLElement;
+        
+        if (!slideElement) {
+          throw new Error('Elemento do slide não encontrado');
+        }
+        
+        const dataUrl = await toPng(slideElement, { 
+          cacheBust: true, 
+          pixelRatio: 2, 
+          filter: imageFilter,
+          backgroundColor: '#ffffff'
+        });
+        
         const link = document.createElement('a');
         link.download = `slide-${i + 1}.png`;
         link.href = dataUrl;
@@ -323,7 +395,9 @@ const App: React.FC = () => {
         await new Promise(resolve => setTimeout(resolve, 200));
       } catch (err) {
         console.error(`Falha ao baixar o slide ${i + 1}`, err);
-        setErrorMessage(`Não foi possível baixar o slide ${i + 1}.`);
+        setErrorMessage(`Não foi possível baixar o slide ${i + 1}. ${err instanceof Error ? err.message : ''}`);
+        // Não continuar o download se houver erro crítico
+        continue;
       } finally {
           root.unmount();
           container.removeChild(tempNode);
@@ -370,10 +444,29 @@ const App: React.FC = () => {
     const root = createRoot(tempNode);
     root.render(element);
 
-    await new Promise(resolve => setTimeout(resolve, 100));
+    // Aguardar renderização inicial
+    await new Promise(resolve => setTimeout(resolve, 150));
 
     try {
-      const dataUrl = await toPng(tempNode.firstChild as HTMLElement, { cacheBust: true, pixelRatio: 2, filter: imageFilter });
+      // Aguardar carregamento da imagem antes de fazer o download
+      await waitForImageLoad(slideToDownload.imageUrl, 15000);
+      
+      // Aguardar um pouco mais para garantir que tudo está renderizado
+      await new Promise(resolve => setTimeout(resolve, 200));
+      
+      const slideElement = tempNode.firstChild as HTMLElement;
+      
+      if (!slideElement) {
+        throw new Error('Elemento do slide não encontrado');
+      }
+      
+      const dataUrl = await toPng(slideElement, { 
+        cacheBust: true, 
+        pixelRatio: 2, 
+        filter: imageFilter,
+        backgroundColor: '#ffffff'
+      });
+      
       const link = document.createElement('a');
       const slideIndex = selectedCarousel.slides.findIndex(s => s.id === slideId);
       link.download = `slide-${slideIndex + 1}.png`;
@@ -381,7 +474,7 @@ const App: React.FC = () => {
       link.click();
     } catch (err) {
       console.error(`Falha ao baixar o slide`, err);
-      setErrorMessage(`Não foi possível baixar o slide.`);
+      setErrorMessage(`Não foi possível baixar o slide. ${err instanceof Error ? err.message : ''}`);
     } finally {
       root.unmount();
       container.removeChild(tempNode);

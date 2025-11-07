@@ -18,13 +18,20 @@ const initializeFromEnv = () => {
     let envKey: string | null = null;
     
     // 1. Tentar process.env (definido pelo Vite durante build)
-    // @ts-ignore - Vite define essas variáveis via define
-    if (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) {
-        envKey = process.env.GEMINI_API_KEY;
+    // @ts-ignore - Vite define essas variáveis via define no vite.config.ts
+    if (typeof process !== 'undefined' && process.env && process.env.GEMINI_API_KEY) {
+        const key = process.env.GEMINI_API_KEY;
+        if (key && typeof key === 'string' && key.trim() && key !== 'coloque_sua_chave_aqui') {
+            envKey = key;
+        }
     }
     // 2. Tentar import.meta.env (padrão Vite para variáveis client-side)
-    else if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GEMINI_API_KEY) {
-        envKey = import.meta.env.VITE_GEMINI_API_KEY;
+    // @ts-ignore - Vite define essas variáveis via define
+    if (!envKey && typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_GEMINI_API_KEY) {
+        const key = import.meta.env.VITE_GEMINI_API_KEY;
+        if (key && typeof key === 'string' && key.trim() && key !== 'coloque_sua_chave_aqui') {
+            envKey = key;
+        }
     }
     
     if (envKey && envKey.trim() && envKey !== 'coloque_sua_chave_aqui') {
@@ -56,17 +63,18 @@ export const setApiKey = (key: string) => {
     
     const trimmedKey = key.trim();
     
+    // Validação básica da chave ANTES de tentar configurar (formato típico das chaves do Google AI Studio)
+    if (trimmedKey.length < 20) {
+        console.warn('[API] Chave de API parece muito curta:', trimmedKey.length, 'caracteres');
+        ai = null;
+        throw new ApiKeyError('A chave de API parece muito curta. Verifique se copiou a chave completa.');
+    }
+    
     // Log parcial da chave para debug (mostra apenas os primeiros e últimos caracteres)
     const maskedKey = trimmedKey.length > 10 
         ? `${trimmedKey.substring(0, 8)}...${trimmedKey.substring(trimmedKey.length - 4)}`
         : '***';
     console.log(`[API] Configurando chave de API: ${maskedKey} (tamanho: ${trimmedKey.length})`);
-    
-    // Validação básica da chave (formato típico das chaves do Google AI Studio)
-    if (trimmedKey.length < 20) {
-        console.warn('[API] Chave de API parece muito curta:', trimmedKey.length, 'caracteres');
-        throw new ApiKeyError('A chave de API parece muito curta. Verifique se copiou a chave completa.');
-    }
     
     try {
         ai = new GoogleGenAI({ apiKey: trimmedKey });
@@ -192,15 +200,37 @@ const handleApiError = (error: unknown, context: string): Error => {
             return new ApiKeyError("A chave de API fornecida não é válida, está incorreta ou não tem as permissões necessárias. Verifique a chave e tente novamente.");
         }
         
+        // Verificar status code 429 primeiro
+        // @ts-ignore
+        const statusCode = error.status || errorDetails.status;
+        
         // Verificar problemas de quota/limite (após verificar autenticação)
+        if (statusCode === 429 || errorMsg.includes('429') || errorMsg.includes('resource exhausted') || 
+            errorMsg.includes('RESOURCE_EXHAUSTED') || fullErrorString.includes('RESOURCE_EXHAUSTED')) {
+            
+            // Verificar se a mensagem menciona quota ou billing
+            if (errorMsg.includes('quota') || errorMsg.includes('exceeded') || 
+                errorMsg.includes('billing') || errorMsg.includes('plan') ||
+                fullErrorString.includes('quota') || fullErrorString.includes('billing')) {
+                // Quota excedida - sem créditos ou faturamento não ativado
+                return new Error("Cota da API excedida ou faturamento não ativado. Ações necessárias: 1) Ative o faturamento na sua conta Google Cloud (https://console.cloud.google.com/billing), 2) Verifique se as APIs do Gemini estão habilitadas (https://console.cloud.google.com/apis/library), 3) Verifique seu uso e créditos em https://ai.dev/usage");
+            }
+            
+            if (errorMsg.includes('rate limit') || errorMsg.includes('too many requests')) {
+                // Rate limit - muitas requisições em pouco tempo
+                return new Error("Muitas requisições em pouco tempo. Aguarde alguns segundos e tente novamente.");
+            }
+            
+            // 429 genérico - provavelmente quota/billing
+            return new Error("Limite de uso excedido. Verifique: 1) Se o faturamento está ativado (https://console.cloud.google.com/billing), 2) Se as APIs do Gemini estão habilitadas (https://console.cloud.google.com/apis/library), 3) Se há créditos disponíveis (https://ai.dev/usage)");
+        }
+        
+        // Verificar outras menções a quota
         if (errorMsg.includes('quota') || 
-            errorMsg.includes('rate limit') ||
-            errorMsg.includes('429') ||
-            errorMsg.includes('too many requests') ||
-            errorMsg.includes('resource exhausted') ||
+            errorMsg.includes('exceeded') ||
             fullErrorString.includes('quota') ||
-            fullErrorString.includes('rate limit')) {
-            return new Error("Limite de uso da API excedido. Por favor, verifique sua cota e tente novamente mais tarde.");
+            fullErrorString.includes('exceeded')) {
+            return new Error("Cota da API excedida. Verifique: 1) Se o faturamento está ativado, 2) Se há créditos disponíveis, 3) Acesse https://ai.dev/usage para verificar seu uso.");
         }
         
         // Verificar se é erro de billing (conta não tem faturamento)
